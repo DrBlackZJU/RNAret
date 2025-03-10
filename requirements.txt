@@ -1,0 +1,8 @@
+biopython==1.78
+fairscale==0.4.0
+numpy==2.2.3
+scikit_learn==1.6.1
+scipy==1.15.2
+torch==2.4.0
+torchscale==0.3.0
+tqdm==4.66.4
