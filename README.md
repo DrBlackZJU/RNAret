@@ -72,6 +72,10 @@ python rri.py -n Ind -k 5 -e data/data_DeepMirTar_IndTest_noRepeats_3folds.txt -
 ```shell
 python ssp.py -n archiveII -k 1 -e data/archiveII --ssp_model_path model/ssp/RNAStrAlign_1mer.pth --eval_only
 ```
+Also, you can use `​ssp2dot.py` to predict the secondary structure of each sequence from a FASTA file and output a dot-bracket file.
+```shell
+python ssp2dot.py -i whatever.fasta -o output.dot -k 1 --ssp_model_path model/ssp/RNAStrAlign_1mer.pth
+```
 
 ### Example 3: mRNA/lncRNA Classification
 ```shell

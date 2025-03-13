@@ -30,7 +30,7 @@ parser.add_argument('-d','--device', type=str, default=None, help='Device to use
 parser.add_argument('--ssp_model_path', type=str, default='model/ssp/all_1mer.pth', help='Path to the trained second structure prediction model')
 parser.add_argument('--use_autocast', action='store_true', help='Use automatic mixed precision training')
 parser.add_argument('-i','--input_file', type=str, default=None, help='Input fasta file')
-parser.add_argument('-o','--output_file', type=str, default='output.dbn', help='Output file')
+parser.add_argument('-o','--output_file', type=str, default='output.dot', help='Output file')
 args = parser.parse_args()
 def constraint(seq):
     seq = seq.upper()
@@ -262,7 +262,7 @@ if __name__ == '__main__':
         with cm:
             for description, seq_raw in sequences:
                 length = len(seq_raw)
-                seq = seq_tokenizer(k=args.k,max_len=len(seq_raw)).tokenize(seq_raw)
+                seq = seq_tokenizer(k=args.k_num,max_len=len(seq_raw)).tokenize(seq_raw)
                 mask = constraint(seq_raw)
                 x = torch.tensor(seq).unsqueeze(0).to(torch.int32).to(device)
                 mask = torch.tensor(mask).unsqueeze(0).to(torch.int32).to(device)
