@@ -59,7 +59,7 @@ python lnc.py -n lnc_H -k 5 -i data/lncRNA_H/train.fa -e data/lncRNA_M/test.fa -
 ```
 The FASTA file used for this task needs to have the ​CDS (Coding Sequence) regions annotated in the ​description line.
 
-##Evaluation
+## Evaluation
 
 To test the fine-tuned model and obtain the performance metrics on the test set., you can run our scripts as follows:
 
@@ -80,7 +80,7 @@ python lnc.py -n lnc_M -k 5 -e data/lncRNA_M/test.fa --lnc_model_path model/lnc/
 
 Other command-line arguments can modify pretrained model parameters, downstream classifier parameters, training hyperparameters, etc. Please refer to the source code or use `-h` or `--help` to view the options (e.g., ```python ssp.py -h```).
 
-##Future Work
+## Future Work
 
 Our future directions include:
 
