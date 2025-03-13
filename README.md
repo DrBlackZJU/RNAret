@@ -1,7 +1,4 @@
-<<<<<<< HEAD
-# RNAret
-=======
-# RNAret
+# RNAret: RNA Language Model based on Retentive Network
 
 ## Introduction
 
@@ -11,65 +8,82 @@ RNAret is a user-friendly tool designed for the prediction of RNA-RNA interactio
 
 ## Installation
 
-To start using RNAret, you need to clone the repository from GitHub and install the required dependencies. Please ensure you have Git and Python installed on your system before proceeding.
-
-1. Open your terminal.
-2. Clone the RNAret repository using the following command:
+To start using RNAret, please clone the RNAret repository and prepare the conda environment using the following command:
    ```
    git clone https://github.com/DrBlackZJU/RNAret.git
-   ```
-3. Navigate to the RNAret directory:
-   ```
    cd RNAret
-   ```
-4. Install the dependencies using pip:
-   ```
+   conda create -n RNAret python=3.10
+   conda activate RNAret
    pip install -r requirements.txt
    ```
 
-## Usage
+## Data Preparation
 
-RNAret provides a simple and intuitive interface for predicting RNA-RNA interactions. Below are examples of how to use the main scripts included in the package.
+To download model weights and down-stream datasets, please visit https://bis.zju.edu.cn/rnaret/download/. Please download the `model.tar.gz` and `datasets.tar.gz` files, place them in the root directory and extract them.
 
-### Example 1: Basic Interaction Prediction
+We use RNAcentral database as our pretraining dataset: https://ftp.ebi.ac.uk/pub/databases/RNAcentral/releases/21.0/sequences/rnacentral_active.fasta.gz. You can also use FASTA format for your own data. If you feel struggling to load FASTA format in the `pretrain.py` script, you can use the `pretrain_preprocess.py` script to convert FASTA format to txt format:
+   ```shell
+   python pretrain_preprocess.py --input_file rnacentral_active.fasta.gz --output_file rnacentral_active.txt -k 5 --max_len 2000
+   ```
 
-To predict interactions between two RNA sequences, you can use the `predict_interaction.py` script.
+## Pretraining
 
-```python
-python predict_interaction.py --sequence1 "AGUCGA" --sequence2 "CGAUCG"
+We use a ​BERT-like MLM (Masked Language Modeling) task to pretrain ​RNAret. To pretrain the model, you can run the following command:
+  ```shell
+  python pretrain.py -n pretrain -k 3 -i data/rnacentral_active.fasta --max_len 2000 -o model/pretrain --cycle_steps 50000
+  ```
+Both ​FASTA files and files that have been preprocessed by `​pretrain_preprocess.py` are acceptable.
+
+## Fine-tuning
+
+To reproduce the fine-tuning experiments, you can run our scripts as follows:
+
+### Example 1: miRNA-mRNA Interaction Prediction
+```shell
+python rri.py -n rri -k 5 -i data/data_DeepMirTar_miRAW_noRepeats_3folds_train.txt -e data/data_DeepMirTar_miRAW_noRepeats_3folds_test.txt --pretrain_model_path model/pretrain/pretrain_5mer.pth
+```
+Using command-line arguments, you can choose different values of k, datasets, or paths to pre-trained model weights as needed.
+
+### Example 2: RNA Secondary Structure Prediction
+```shell
+python ssp.py -n RNAStrAlign -k 1 -i data/RNAStrAlign -e data/archiveII --pretrain_model_path model/pretrain/pretrain_1mer.pth
+```
+```shell
+python ssp.py -n bpRNA -k 1 -i data/bpRNA/TR0 -v data/bpRNA/VL0 -e data/bpRNA/TS0 --pretrain_model_path model/pretrain/pretrain_1mer.pth
+```
+This script will read all `.bpseq` files in the folder with lengths less than or equal to the maximum length.
+
+### Example 3: mRNA/lncRNA Classification
+```shell
+python lnc.py -n lnc_H -k 5 -i data/lncRNA_H/train.fa -e data/lncRNA_M/test.fa --pretrain_model_path model/pretrain/pretrain_5mer.pth
+```
+The FASTA file used for this task needs to have the ​CDS (Coding Sequence) regions annotated in the ​description line.
+
+##Evaluation
+
+To test the fine-tuned model and obtain the performance metrics on the test set., you can run our scripts as follows:
+
+### Example 1: miRNA-mRNA Interaction Prediction
+```shell
+python rri.py -n Ind -k 5 -e data/data_DeepMirTar_IndTest_noRepeats_3folds.txt --rri_model_path model/rri/rri_5mer.pth --eval_only
 ```
 
-This command will output the predicted interaction sites between the two RNA sequences.
-
-### Example 2: Batch Processing
-
-If you have multiple RNA sequences and want to predict interactions in batch, you can use the `batch_prediction.py` script. This script accepts a file containing RNA sequences in FASTA format.
-
-```python
-python batch_prediction.py --input_file "sequences.fasta"
+### Example 2: RNA Secondary Structure Prediction
+```shell
+python ssp.py -n archiveII -k 1 -e data/archiveII --ssp_model_path model/ssp/RNAStrAlign_1mer.pth --eval_only
 ```
 
-The script will generate a report detailing the interaction predictions for each pair of sequences in the input file.
-
-### Example 3: Visualization of Interactions
-
-To visualize the interactions, RNAret includes a `visualize_interaction.py` script that generates graphical representations of the predicted interaction sites.
-
-```python
-python visualize_interaction.py --sequence1 "AGUCGA" --sequence2 "CGAUCG" --output_file "interaction.pdf"
+### Example 3: mRNA/lncRNA Classification
+```shell
+python lnc.py -n lnc_M -k 5 -e data/lncRNA_M/test.fa --lnc_model_path model/lnc/lnc_M_5mer.pth --eval_only
 ```
 
-This command will create a PDF file named `interaction.pdf` in the current directory, showing the interaction sites between the two RNA sequences.
+Other command-line arguments can modify pretrained model parameters, downstream classifier parameters, training hyperparameters, etc. Please refer to the source code or use `-h` or `--help` to view the options (e.g., ```python ssp.py -h```).
 
-## Contact
+##Future Work
 
-For any questions, bug reports, or feature requests, please open an issue on the [GitHub repository](https://github.com/yourusername/RNAret/issues). Contributions to RNAret are also welcome!
+Our future directions include:
 
-## Acknowledgments
-
-RNAret would not be possible without the contributions from its development team and the support of the bioinformatics community. We are grateful for the open-source community that continuously helps improve this tool.
-
----
-
-This README provides a basic overview and usage instructions for RNAret. For more detailed information, please refer to the documentation included in the package or visit the project's GitHub page.
->>>>>>> 20b3cee (main)
+1. Expanding the capabilities of ​RNAret in more downstream biological tasks,
+2. Developing generative nucleotide and protein language models based on ​RetNet,
+3. Upgrading the ​RNAret web server service (https://bis.zju.edu.cn/rnaret).

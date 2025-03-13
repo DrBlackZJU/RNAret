@@ -35,7 +35,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Preprocess RNA sequences.")
     parser.add_argument("input_path", type=str, help="Path to the input FASTA file.")
     parser.add_argument("output_path", type=str, help="Path to the output text file.")
-    parser.add_argument("--k", type=int, default=5, help="K-mer length (default: 5).")
+    parser.add_argument("-k","--k_num",type=int, default=5, help="K-mer length (default: 5).")
     parser.add_argument("--max_len", type=int, default=2000, help="Maximum sequence length (default: 2000).")
     
     args = parser.parse_args()

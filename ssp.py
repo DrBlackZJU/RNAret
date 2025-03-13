@@ -36,9 +36,9 @@ parser.add_argument('--min_bp_distance', type=int, default=4, help='Minimum base
 # training options
 parser.add_argument('-d','--device', type=str, default=None, help='Device to use')
 parser.add_argument('-n','--task_name', type=str, default='ssp', help='Name of the task')
-parser.add_argument('-i','--train_path', nargs='+', default=['data/RNAStrAlign_new'], help='Paths to the training dataset directories')
+parser.add_argument('-i','--train_path', nargs='+', default=['data/RNAStrAlign'], help='Paths to the training dataset directories')
 parser.add_argument('-v','--val_path', nargs='+', default=None, help='Paths to the validation dataset directories')
-parser.add_argument('-e','--test_path', nargs='+', default=['data/archiveII_new'], help='Paths to the test dataset directories for evaluation')
+parser.add_argument('-e','--test_path', nargs='+', default=['data/archiveII'], help='Paths to the test dataset directories for evaluation')
 parser.add_argument('--val_ratio', type=float, default=0.1, help='Ratio of validation data if --val_path is not provided')
 parser.add_argument('-l','--max_len', type=int, default=600, help='Maximum sequence length')
 parser.add_argument('-o','--output_path', type=str, default='model/ssp',help='Path to save the trained model')
