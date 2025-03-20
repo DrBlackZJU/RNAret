@@ -40,7 +40,7 @@ To reproduce the fine-tuning experiments, you can run our scripts as follows:
 
 ### Example 1: miRNA-mRNA Interaction Prediction
 ```shell
-python rri.py -n rri -k 5 -i data/data_DeepMirTar_miRAW_noRepeats_3folds_train.txt -e data/data_DeepMirTar_miRAW_noRepeats_3folds_test.txt --pretrain_model_path model/pretrain/pretrain_5mer.pth
+python rri.py -n MirTar -k 5 -i data/data_DeepMirTar_miRAW_noRepeats_3folds_train.txt -e data/data_DeepMirTar_miRAW_noRepeats_3folds_test.txt --pretrain_model_path model/pretrain/pretrain_5mer.pth
 ```
 Using command-line arguments, you can choose different values of k, datasets, or paths to pre-trained model weights as needed.
 
@@ -65,7 +65,7 @@ To test the fine-tuned model and obtain the performance metrics on the test set.
 
 ### Example 1: miRNA-mRNA Interaction Prediction
 ```shell
-python rri.py -n Ind -k 5 -e data/data_DeepMirTar_IndTest_noRepeats_3folds.txt --rri_model_path model/rri/rri_5mer.pth --eval_only
+python rri.py -n Ind -k 5 -e data/data_DeepMirTar_IndTest_noRepeats_3folds.txt --rri_model_path model/rri/MirTar_5mer.pth --eval_only
 ```
 
 ### Example 2: RNA Secondary Structure Prediction

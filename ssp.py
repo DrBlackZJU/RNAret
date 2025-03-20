@@ -342,9 +342,9 @@ if __name__ == '__main__':
     
     model = rnaret_ssp_model(model_config)
     if args.ssp_model_path is not None:
-        model.load_state_dict(torch.load(args.ssp_model_path,weights_only=True))
+        model.load_state_dict(torch.load(args.ssp_model_path,weights_only=True,map_location=device))
     if args.pretrained_model_path:
-        model.ret.load_state_dict(torch.load(args.pretrained_model_path,weights_only=True))
+        model.ret.load_state_dict(torch.load(args.pretrained_model_path,weights_only=True,map_location=device))
     post_processor = post_process()
     model = model.to(device)
     

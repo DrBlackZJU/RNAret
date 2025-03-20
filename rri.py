@@ -27,7 +27,7 @@ parser.add_argument('--activation_dropout', type=float, default=0.2, help='Activ
 
 # training options
 parser.add_argument('-d','--device', type=str, default=None, help='Device to use')
-parser.add_argument('-n','--task_name', type=str, default='rri', help='Name of the task')
+parser.add_argument('-n','--task_name', type=str, default='MirTar', help='Name of the task')
 parser.add_argument('-i','--train_path', nargs='+', default=['data/data_DeepMirTar_miRAW_noRepeats_3folds_train.txt'], help='Paths to the training and validation dataset directories')
 parser.add_argument('-v','--val_path', nargs='+', default=None, help='Paths to the validation dataset directories')
 parser.add_argument('-e','--test_path', nargs='+', default=['data/data_DeepMirTar_miRAW_noRepeats_3folds_test.txt'], help='Paths to the test dataset directories for evaluation')
@@ -145,9 +145,9 @@ if __name__ == '__main__':
     
     model = rnaret_rri_model(model_config)
     if args.rri_model_path is not None:
-        model.load_state_dict(torch.load(args.rri_model_path,weights_only=True))
+        model.load_state_dict(torch.load(args.rri_model_path,weights_only=False,map_location=device))
     if args.pretrained_model_path is not None:
-        model.ret.load_state_dict(torch.load(args.pretrained_model_path,weights_only=True))
+        model.ret.load_state_dict(torch.load(args.pretrained_model_path,weights_only=False,map_location=device))
     model = model.to(device)
 
     if args.train_path is not None and not args.eval_only:
