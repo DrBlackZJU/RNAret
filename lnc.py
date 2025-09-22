@@ -2,7 +2,7 @@ import numpy as np
 import os
 import torch
 import itertools
-from retnet import RetNet,RetNetConfig
+from retnet import RetNet, RetNetConfig
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 from Bio import SeqIO
 import argparse
@@ -10,16 +10,19 @@ import logging
 from tqdm import tqdm
 import contextlib
 
+# ------------------------------
+# Argument Parser for hyperparameters and file paths
+# ------------------------------
 parser = argparse.ArgumentParser(description='RNA Secondary Structure Prediction Model Built on RNAret')
 
-# training hyperparameters
+# Training hyperparameters
 parser.add_argument('-bs','--batch_size', type=int, default=50, help='Batch size for training and evaluation')
 parser.add_argument('-k','--k_num', type=int, default=3, help='K-mer length')
 parser.add_argument('--num_epochs', type=int, default=50, help='Number of epochs to train')
 parser.add_argument('-lr','--learning_rate', type=float, default=0.00005, help='Learning rate for trainable parameters')
 parser.add_argument('--weight_factor', type=float, default=1.0, help='Weight factor for False Negative loss')
 
-# pretrained RetNet hyperparameters
+# Pretrained RetNet hyperparameters
 parser.add_argument('--retnet_embed_dim', type=int, default=384, help='Embedding dimension for RetNet')
 parser.add_argument('--retnet_value_embed_dim', type=int, default=512, help='Value embedding dimension for RetNet')
 parser.add_argument('--retnet_ffn_embed_dim', type=int, default=512, help='FFN embedding dimension for RetNet')
@@ -28,12 +31,12 @@ parser.add_argument('--retnet_retention_heads', type=int, default=4, help='Numbe
 parser.add_argument('--dropout', type=float, default=0.2, help='Dropout rate')
 parser.add_argument('--activation_dropout', type=float, default=0.2, help='Activation dropout rate')
 
-# classifier hyperparameters
+# Classifier hyperparameters
 parser.add_argument('--resnet_block_num', type=int, default=16, help='Number of ResNet blocks in the classifier')
 parser.add_argument('--resnet_hidden_dim', type=int, default=128, help='Hidden dimension in ResNet')
 parser.add_argument('--resnet_kernel_size', type=int, default=7, help='Kernel size in ResNet')
 
-# training options
+# Training and evaluation options
 parser.add_argument('-d','--device', type=str, default=None, help='Device to use')
 parser.add_argument('-n','--task_name', type=str, default='lnc_H', help='Name of the task')
 parser.add_argument('-i','--train_path', nargs='+', default=['data/lncRNA_H/train.fa'], help='Paths to the training dataset directories')
@@ -45,15 +48,20 @@ parser.add_argument('-o','--output_path', type=str, default='model/lnc',help='Pa
 parser.add_argument('--log_path', type=str, default='log/lnc', help='Path to save the log files')
 parser.add_argument('--eval_only', action='store_true', help='Evaluate the model without training')
 parser.add_argument('--pretrained_model_path', type=str, default=None, help='Path to the pretrained model')
-parser.add_argument('--lnc_model_path', type=str, default=None, help='Path to the trained second structure prediction model')
+parser.add_argument('--lnc_model_path', type=str, default=None, help='Path to the trained coding ability prediction model')
 parser.add_argument('--use_autocast', action='store_true', help='Use automatic mixed precision training')
 args = parser.parse_args()
-#defining model
+
+# ------------------------------
+# Model Definition
+# ------------------------------
 
 class ResNet1DBlock(torch.nn.Module):
+    """
+    A single 1D ResNet block consisting of Conv1D layers with skip connection.
+    """
     def __init__(self, embed_dim, kernel_size=3, bias=False):
         super().__init__()
-
         self.conv_net = torch.nn.Sequential(
             torch.nn.Conv1d(in_channels=embed_dim, out_channels=embed_dim, kernel_size=1, bias=bias),
             torch.nn.ReLU(),
@@ -62,32 +70,32 @@ class ResNet1DBlock(torch.nn.Module):
             torch.nn.Conv1d(in_channels=embed_dim, out_channels=embed_dim, kernel_size=1, bias=bias),
             torch.nn.ReLU()
         )
-        
+    
     def forward(self, x):
         residual = x
-
         x = self.conv_net(x)
-        x = x + residual
-
+        x = x + residual  # Skip connection
         return x
-    
+
 class ResNet1D(torch.nn.Module):
+    """
+    A stack of ResNet1D blocks.
+    """
     def __init__(self, embed_dim, num_blocks, kernel_size=3, bias=False):
         super().__init__()
-
         self.blocks = torch.nn.ModuleList(
-            [
-                ResNet1DBlock(embed_dim, kernel_size, bias=bias) for _ in range(num_blocks)
-            ]
+            [ResNet1DBlock(embed_dim, kernel_size, bias=bias) for _ in range(num_blocks)]
         )
 
     def forward(self, x):
         for block in self.blocks:
             x = block(x)
-
         return x   
 
 class ResNet1D_classifier(torch.nn.Module):
+    """
+    Classifier head based on ResNet1D blocks, operating on RetNet embeddings.
+    """
     def __init__(self):
         super(ResNet1D_classifier, self).__init__()
         self.linear_in = torch.nn.Linear(args.retnet_embed_dim,args.resnet_hidden_dim)
@@ -99,10 +107,12 @@ class ResNet1D_classifier(torch.nn.Module):
         x = x.transpose(1,2)
         x = self.conv_out(x)
         x = x.squeeze(1)
-        
         return x
 
 class rnaret_lnc_model(torch.nn.Module): 
+    """
+    Main model combining RetNet encoder and ResNet1D classifier.
+    """
     def __init__(self, args):
         super(rnaret_lnc_model, self).__init__()
         self.ret = RetNet(args)
@@ -110,22 +120,27 @@ class rnaret_lnc_model(torch.nn.Module):
 
     def forward(self, x): 
         _,aux  = self.ret(x)
-        x = aux['inner_states'][-1]
+        x = aux['inner_states'][-1]  # Use last hidden state
         x = self.classifier(x)
         return x
-    
-#preparing dataset
+
+# ------------------------------
+# Dataset and Tokenization
+# ------------------------------
 
 class lnc_tokenizer():
+    """
+    Tokenizer for lncRNA/mRNA sequences using k-mer encoding.
+    """
     def __init__(self, k, max_len):
         self.k = k
         self.max_len = max_len
         
     def read(self, file_path):
-        seqs = []
-        seq_lens = []
-        cds = []
-        
+        """
+        Read FASTA file and extract sequences, lengths, and coding sequence (CDS) regions.
+        """
+        seqs, seq_lens, cds = [], [], []
         with open(file_path, 'r') as f:
             for record in SeqIO.parse(f, 'fasta'):
                 seq = str(record.seq)
@@ -140,29 +155,28 @@ class lnc_tokenizer():
                     cds_part = next((part for part in parts if part.startswith('CDS:')), None)
                     start, end = map(int, cds_part.split(':')[1].split('-'))
                     cds.append([start-1, end])
-                    
         return seqs, cds, seq_lens
         
     def tokenize(self, seq):
+        """
+        Convert sequence into k-mer token indices.
+        """
         kmer_list = np.array([''.join(p) for p in itertools.product('ATCG', repeat=self.k)])
         kmer_to_index = {kmer: idx + 6 for idx, kmer in enumerate(kmer_list)}
-        seq = seq.upper()
-        seq = seq.replace('U','T')
+        seq = seq.upper().replace('U','T')
         seq_len = len(seq)
-        
         tokens = np.zeros(self.max_len, dtype=np.int16)
-        
         kmers = np.array([seq[i:i+self.k] for i in range(seq_len - self.k + 1)])
-        
         indices = np.array([kmer_to_index.get(kmer, 2) for kmer in kmers])
-        
         tokens[self.k//2:self.k//2+len(indices)] = indices[:]
-        
         tokens[:self.k//2] = 1
         tokens[self.k//2+len(indices):+len(indices)+self.k-1] = 1
         return tokens
 
 class lnc_dataset(torch.utils.data.Dataset):
+    """
+    PyTorch dataset wrapper for lncRNA sequences with labels and masks.
+    """
     def __init__(self, file, k, max_len):
         self.max_len = max_len
         self.tokenizer = lnc_tokenizer(k=k, max_len=max_len)
@@ -177,10 +191,13 @@ class lnc_dataset(torch.utils.data.Dataset):
         mask = np.zeros(self.max_len, dtype=np.int16)
         mask[:self.seq_lens[idx]] = 1
         label = np.zeros(self.max_len, dtype=np.int16) 
-        label[start:end] = 1
+        label[start:end] = 1  # Mark CDS region
         return seq, label, mask
-    
+
 class post_process(torch.nn.Module):
+    """
+    Post-processing: apply sigmoid + masking and compute sequence-level probability.
+    """
     def __init__(self):
         super(post_process, self).__init__()
         
@@ -190,20 +207,24 @@ class post_process(torch.nn.Module):
             seq_prob = prob.unfold(1, 30, 1).mean(dim=2).max(dim=1).values
         return seq_prob
 
+# ------------------------------
+# Training and Evaluation
+# ------------------------------
 
 if __name__ == '__main__':
+    # Logging setup
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(f"{args.log_path}/{args.task_name}_{args.k_num}mer.log"),
-            ])
+            handlers=[logging.FileHandler(f"{args.log_path}/{args.task_name}_{args.k_num}mer.log")])
     logger = logging.getLogger(__name__)
     
+    # Device setup
     if args.device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     else:
         device = torch.device(args.device)
     cm = torch.amp.autocast(device_type='cuda') if device.type != 'cpu' and args.use_autocast else contextlib.nullcontext()
     
+    # Model configuration
     model_config = RetNetConfig(
         vocab_size=4**args.k_num+6,
         retnet_embed_dim=args.retnet_embed_dim,
@@ -223,17 +244,12 @@ if __name__ == '__main__':
     post_processor = post_process()
     model = model.to(device)
       
+    # Dataset preparation
     if args.train_path is not None and not args.eval_only:
-        datasets = []
-        for data_dir in args.train_path:
-            dataset = lnc_dataset(data_dir, max_len=args.max_len, k=args.k_num)
-            datasets.append(dataset)
+        datasets = [lnc_dataset(data_dir, max_len=args.max_len, k=args.k_num) for data_dir in args.train_path]
         train_dataset = torch.utils.data.ConcatDataset(datasets)
         if args.val_path is not None:
-            val_datasets = []
-            for data_dir in args.val_path:
-                dataset = lnc_dataset(data_dir, max_len=args.max_len, k=args.k_num)
-                val_datasets.append(dataset)
+            val_datasets = [lnc_dataset(data_dir, max_len=args.max_len, k=args.k_num) for data_dir in args.val_path]
             val_dataset = torch.utils.data.ConcatDataset(val_datasets)
             train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
             val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size)
@@ -245,27 +261,25 @@ if __name__ == '__main__':
             train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
             val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size)
     if args.test_path is not None:
-        test_datasets = []
-        for data_dir in args.test_path:
-            dataset = lnc_dataset(data_dir, max_len=args.max_len, k=args.k_num)
-            test_datasets.append(dataset)
+        test_datasets = [lnc_dataset(data_dir, max_len=args.max_len, k=args.k_num) for data_dir in args.test_path]
         test_dataset = torch.utils.data.ConcatDataset(test_datasets)
         test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size)
 
-    
+    # Optimizer and loss
     optimizer = torch.optim.AdamW(params=model.parameters(), lr=args.learning_rate)
     criterion = torch.nn.BCEWithLogitsLoss(reduction='none')
     scaler = torch.amp.GradScaler(enabled=True)
     
+    # ------------------------------
+    # Training loop
+    # ------------------------------
     if not args.eval_only:
         for epoch in range(args.num_epochs):
             model.train()
             total_loss = []
             pbar = tqdm(train_dataloader, desc=f"Training Epoch {epoch}")
             for i, (x, y, mask) in enumerate(pbar):
-                x = x.to(torch.long).to(device)
-                y = y.to(torch.float32).to(device)
-                mask = mask.to(torch.int).to(device)
+                x, y, mask = x.to(torch.long).to(device), y.to(torch.float32).to(device), mask.to(torch.int).to(device)
                 optimizer.zero_grad()
                 with cm:
                     prob = model(x)
@@ -278,18 +292,14 @@ if __name__ == '__main__':
                 scaler.update()
                 pbar.set_postfix(loss=loss.item())
             logger.info(f'Training Set —— Epoch: {epoch}, Loss: {sum(total_loss)/len(total_loss):.5f}')
-                    
+
+            # Validation
             model.eval()
             with torch.no_grad():
-                all_probs = []
-                all_preds = []
-                all_labels = []
-                total_loss = []
+                all_probs, all_preds, all_labels, total_loss = [], [], [], []
                 pbar = tqdm(val_dataloader, desc=f"Validation Epoch {epoch}")
                 for x, y, mask in pbar:
-                    x = x.to(torch.long).to(device)  
-                    y = y.to(torch.float32).to(device)
-                    mask = mask.to(torch.int).to(device)
+                    x, y, mask = x.to(torch.long).to(device), y.to(torch.float32).to(device), mask.to(torch.int).to(device)
                     with cm:
                         prob = model(x)
                         loss = criterion(prob, y)
@@ -310,9 +320,12 @@ if __name__ == '__main__':
                 f1 = f1_score(all_labels, all_preds)
                 logger.info(f'Validation Set —— Epoch: {epoch}, Loss: {sum(total_loss)/len(total_loss):.5f}, Accuracy: {accuracy:.4f}')
                 logger.info(f'Validation Set —— Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1:.4f}, AUC: {auc:.4f}')
-            
+
         torch.save(model.state_dict(), f"{args.output_path}/{args.task_name}_{args.k_num}mer.pth")
     
+    # ------------------------------
+    # Testing loop
+    # ------------------------------
     if args.test_path is not None:
         model.eval()
         with torch.no_grad():

@@ -2,23 +2,26 @@ import numpy as np
 import os
 import torch
 import itertools
-from retnet import RetNet,RetNetConfig
+from retnet import RetNet, RetNetConfig
 from scipy.optimize import linear_sum_assignment
 import argparse
 import logging
 from tqdm import tqdm
 import contextlib
 
+# -----------------------------
+# Argument Parser Configuration
+# -----------------------------
 parser = argparse.ArgumentParser(description='RNA Secondary Structure Prediction Model Built on RNAret')
 
-# training hyperparameters
+# Training hyperparameters
 parser.add_argument('-bs','--batch_size', type=int, default=1, help='Batch size for training and evaluation')
 parser.add_argument('-k','--k_num', type=int, default=1, help='K-mer length')
 parser.add_argument('--num_epochs', type=int, default=50, help='Number of epochs to train')
 parser.add_argument('-lr','--learning_rate', type=float, default=0.00001, help='Learning rate for trainable parameters')
 parser.add_argument('--weight_factor', type=float, default=10.0, help='Weight factor for False Negative loss')
 
-# pretrained RetNet hyperparameters
+# Pretrained RetNet hyperparameters
 parser.add_argument('--retnet_embed_dim', type=int, default=384, help='Embedding dimension for RetNet')
 parser.add_argument('--retnet_value_embed_dim', type=int, default=512, help='Value embedding dimension for RetNet')
 parser.add_argument('--retnet_ffn_embed_dim', type=int, default=512, help='FFN embedding dimension for RetNet')
@@ -27,13 +30,13 @@ parser.add_argument('--retnet_retention_heads', type=int, default=4, help='Numbe
 parser.add_argument('--dropout', type=float, default=0.2, help='Dropout rate')
 parser.add_argument('--activation_dropout', type=float, default=0.2, help='Activation dropout rate')
 
-# classifier hyperparameters
+# Classifier hyperparameters
 parser.add_argument('--resnet_block_num', type=int, default=16, help='Number of ResNet blocks in the classifier')
 parser.add_argument('--resnet_hidden_dim', type=int, default=128, help='Hidden dimension in ResNet')
 parser.add_argument('--resnet_kernel_size', type=int, default=3, help='Kernel size in ResNet')
 parser.add_argument('--min_bp_distance', type=int, default=4, help='Minimum base pair distance to avoid sharp loops')
 
-# training options
+# Training options
 parser.add_argument('-d','--device', type=str, default=None, help='Device to use')
 parser.add_argument('-n','--task_name', type=str, default='ssp', help='Name of the task')
 parser.add_argument('-i','--train_path', nargs='+', default=['data/RNAStrAlign'], help='Paths to the training dataset directories')
@@ -47,8 +50,12 @@ parser.add_argument('--eval_only', action='store_true', help='Evaluate the model
 parser.add_argument('--pretrained_model_path', type=str, default=None, help='Path to the pretrained model')
 parser.add_argument('--ssp_model_path', type=str, default=None, help='Path to the trained second structure prediction model')
 parser.add_argument('--use_autocast', action='store_true', help='Use automatic mixed precision training')
+
 args = parser.parse_args()
 
+# -----------------------------
+# Constraint function for base-pair masking
+# -----------------------------
 def constraint(seq, N):
     seq = seq.upper()
     sharp = args.min_bp_distance - 1
@@ -57,35 +64,37 @@ def constraint(seq, N):
     else:
         matrix = np.zeros((N, N), dtype=int)
 
+    # Assign possible base-pairing constraints based on canonical and wobble pairs
     for i in range(sharp, len(seq)):
         for j in range(i-sharp):
             base_i = seq[i]
             base_j = seq[j]
-            if  ((base_i == 'A' and base_j == 'U') or (base_i == 'U' and base_j == 'A') or
+            if ((base_i == 'A' and base_j == 'U') or (base_i == 'U' and base_j == 'A') or
                 (base_i == 'C' and base_j == 'G') or (base_i == 'G' and base_j == 'C') or
                 (base_i == 'G' and base_j == 'U') or (base_i == 'U' and base_j == 'G') or
                 base_i == 'N' or base_j == 'N'):
                 matrix[i, j] = 1
-    
     return matrix
 
+# -----------------------------
+# Outer concatenation layer: builds pairwise features
+# -----------------------------
 class outer_concat(torch.nn.Module):
     def __init__(self):
         super(outer_concat, self).__init__()
-
     def forward(self, x1, x2):
         seq_len = x1.shape[1]
         x1 = x1.unsqueeze(-2).expand(-1, -1, seq_len, -1)
         x2 = x2.unsqueeze(-3).expand(-1, seq_len, -1, -1)
         x = torch.concat((x1,x2),dim=-1)
-
         return x
 
-
+# -----------------------------
+# 2D ResNet block for local structural feature extraction
+# -----------------------------
 class ResNet2DBlock(torch.nn.Module):
     def __init__(self, embed_dim, kernel_size=3, bias=False):
         super().__init__()
-
         self.conv_net = torch.nn.Sequential(
             torch.nn.Conv2d(in_channels=embed_dim, out_channels=embed_dim, kernel_size=1, bias=bias),
             torch.nn.ReLU(),
@@ -94,31 +103,29 @@ class ResNet2DBlock(torch.nn.Module):
             torch.nn.Conv2d(in_channels=embed_dim, out_channels=embed_dim, kernel_size=1, bias=bias),
             torch.nn.ReLU()
         )
-
     def forward(self, x):
         residual = x
-
         x = self.conv_net(x)
         x = x + residual
-
         return x
-    
+
+# -----------------------------
+# Stacked 2D ResNet blocks
+# -----------------------------
 class ResNet2D(torch.nn.Module):
     def __init__(self, embed_dim, num_blocks, kernel_size=3, bias=False):
         super().__init__()
-
         self.blocks = torch.nn.ModuleList(
-            [
-                ResNet2DBlock(embed_dim, kernel_size, bias=bias) for _ in range(num_blocks)
-            ]
+            [ ResNet2DBlock(embed_dim, kernel_size, bias=bias) for _ in range(num_blocks) ]
         )
-
     def forward(self, x):
         for block in self.blocks:
             x = block(x)
+        return x
 
-        return x    
-    
+# -----------------------------
+# 2D ResNet classifier for base-pair matrix prediction
+# -----------------------------
 class ResNet2D_classifier(torch.nn.Module):
     def __init__(self):
         super(ResNet2D_classifier, self).__init__()
@@ -126,105 +133,99 @@ class ResNet2D_classifier(torch.nn.Module):
         self.linear_in = torch.nn.Linear(2*args.retnet_embed_dim,args.resnet_hidden_dim)
         self.resnet = ResNet2D(args.resnet_hidden_dim, args.resnet_block_num, args.resnet_kernel_size, bias=True)
         self.conv_out = torch.nn.Conv2d(args.resnet_hidden_dim, 1, kernel_size=3, padding="same")
-        
-
     def forward(self, x):
         x = self.outer_concat(x, x)
         x = self.linear_in(x)
         x = x.permute(0,3,1,2)
         x = self.resnet(x)
-
         x = self.conv_out(x)
         x = x.squeeze(1)
-        
         return x
-    
-class rnaret_ssp_model(torch.torch.nn.Module): 
+
+# -----------------------------
+# RNAret SSP model: RetNet backbone + 2D ResNet classifier
+# -----------------------------
+class rnaret_ssp_model(torch.torch.nn.Module):
     def __init__(self, args):
         super(rnaret_ssp_model, self).__init__()
         self.ret = RetNet(args)
         self.classifier = ResNet2D_classifier()
-
-    def forward(self, x):      
-        _,aux  = self.ret(x)
+    def forward(self, x):
+        _,aux = self.ret(x)
         x = aux['inner_states'][-1]
         x = self.classifier(x)
         return x
-    
+
+# -----------------------------
+# Post-processing module: ensures valid base-pairing structure
+# -----------------------------
 class post_process(torch.nn.Module):
     def __init__(self):
         super(post_process, self).__init__()
-        
     def forward(self, x, mask):
         with torch.no_grad():
             x = torch.sigmoid(x)
             x = x * mask
-            
             sec_struct = torch.where(x > 0.5, torch.ones_like(x), torch.zeros_like(x))
             x = x * sec_struct
-            
-            B, L, _ = x.shape
 
+            B, L, _ = x.shape
             for b in range(B):
                 tmp = x[b].clone()
                 row_ind, col_ind = linear_sum_assignment(-tmp.cpu().numpy())
                 binary_matrix = torch.zeros_like(tmp)
-
                 for r, c in zip(row_ind, col_ind):
                     if col_ind[col_ind[c]] == c:
                         binary_matrix[r, c] = 1
-                    
                 sec_struct[b] = binary_matrix
 
             sec_struct = sec_struct * mask
-            
             sec_struct = sec_struct + sec_struct.transpose(1,2)
-            
+
+            # Ensure one-to-one pairing
             for b in range(B):
                 for i in range(L):
                     if torch.sum(sec_struct[b, i, :]) > 1:
                         max_idx = torch.argmax(sec_struct[b, i, :])
                         sec_struct[b, i, :] = 0
                         sec_struct[b, i, max_idx] = 1
-
                     if torch.sum(sec_struct[b, :, i]) > 1:
                         max_idx = torch.argmax(sec_struct[b, :, i])
                         sec_struct[b, :, i] = 0
                         sec_struct[b, max_idx, i] = 1
-                
-        return sec_struct
-        
-    
+
+            return sec_struct
+
+# -----------------------------
+# Parsing functions for structure files (.ct and .bpseq)
+# -----------------------------
 def parse_ct_file(file, max_len):
     try:
         matrix = np.zeros((max_len, max_len), dtype=np.int8)
         seq = ''
-
         with open(file, 'r') as f:
             if file.endswith(".ct"):
                 next(f)
-            for line in f:
-                parts = line.strip().split()
-                idx, nt, _, _, pair, _ = parts
-                seq = seq + nt
-                idx = int(idx) - 1
-                pair = int(pair) - 1
-                if pair != -1:
-                    matrix[idx, pair] = 1
-                    matrix[pair, idx] = 1
+                for line in f:
+                    parts = line.strip().split()
+                    idx, nt, _, _, pair, _ = parts
+                    seq = seq + nt
+                    idx = int(idx) - 1
+                    pair = int(pair) - 1
+                    if pair != -1:
+                        matrix[idx, pair] = 1
+                        matrix[pair, idx] = 1
         if len(seq) > max_len:
             return None, None, None
         else:
             return matrix, len(seq), seq
-
     except Exception:
         return None, None, None
-    
+
 def parse_bpseq_file(file, max_len=512):
     try:
         matrix = np.zeros((max_len,max_len), dtype=np.int8)
         seq = ''
-
         with open(file, 'r') as f:
             if file.endswith(".bpseq"):
                 for line in f:
@@ -242,10 +243,12 @@ def parse_bpseq_file(file, max_len=512):
             return None, None, None
         else:
             return matrix, len(seq), seq
-
     except Exception:
         return None, None, None
 
+# -----------------------------
+# Tokenizer: converts RNA sequence into k-mer token sequence
+# -----------------------------
 class seq_tokenizer():
     def __init__(self, k=5, max_len=512):
         self.k = k
@@ -256,23 +259,20 @@ class seq_tokenizer():
         seq = seq.upper()
         seq = seq.replace('U','T')
         seq_len = len(seq)
-        
         if args.batch_size == 1:
             tokens = np.zeros(seq_len, dtype=np.int16)
         else:
             tokens = np.zeros(self.max_len, dtype=np.int16)
-        
         kmers = np.array([seq[i:i+self.k] for i in range(seq_len - self.k + 1)])
-        
         indices = np.array([kmer_to_index.get(kmer, 2) for kmer in kmers])
-        
         tokens[self.k//2:self.k//2+len(indices)] = indices[:]
-        
         tokens[:self.k//2] = 1
         tokens[self.k//2+len(indices):self.k//2+len(indices)+(self.k-1)//2] = 1
         return tokens
 
-
+# -----------------------------
+# Dataset for RNA Secondary Structure Prediction
+# -----------------------------
 class ssp_dataset(torch.utils.data.Dataset):
     def __init__(self, data_dir,max_len, k=5):
         self.data_dir = data_dir
@@ -280,7 +280,6 @@ class ssp_dataset(torch.utils.data.Dataset):
         self.seqs = []
         self.constraint = []
         self.tokenizer = seq_tokenizer(k=k,max_len=max_len)
-
         for root, dirs, files in os.walk(data_dir):
             for filename in files:
                 if filename.endswith(".bpseq"):
@@ -292,43 +291,46 @@ class ssp_dataset(torch.utils.data.Dataset):
                         self.matrices.append(matrix)
                         self.seqs.append(seq)
                         self.constraint.append(con_matrix)
-
     def __len__(self):
         return len(self.seqs)
-
     def __getitem__(self, idx):
         return self.seqs[idx], self.matrices[idx], self.constraint[idx]
-    
+
+# -----------------------------
+# Evaluation metrics (Precision, Recall, F1)
+# -----------------------------
 def compute_metrics(target, prediction):
     positive_mask = target == 1
     negative_mask = target == 0
     pred_positive_mask = prediction > 0
-    
     tp = torch.sum(torch.logical_and(positive_mask, pred_positive_mask)).item()
     fp = torch.sum(torch.logical_and(negative_mask, pred_positive_mask)).item()
     fn = torch.sum(torch.logical_and(positive_mask, ~pred_positive_mask)).item()
     tn = torch.sum(torch.logical_and(negative_mask, ~pred_positive_mask)).item()
-    
+
     precision = tp / (tp + fp) if tp + fp != 0 else 0
     recall = tp / (tp + fn) if tp + fn != 0 else 0
     f1 = 2 * (precision * recall) / (precision + recall) if precision + recall != 0 else 0
-    
     return precision, recall, f1
 
-    
+# -----------------------------
+# Training and Evaluation Loop
+# -----------------------------
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(f"{args.log_path}/{args.task_name}_{args.k_num}mer.log"),
-            ])
+    # Configure logging
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[
+        logging.FileHandler(f"{args.log_path}/{args.task_name}_{args.k_num}mer.log"),
+    ])
     logger = logging.getLogger(__name__)
-    
+
+    # Device setup
     if args.device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     else:
         device = torch.device(args.device)
     cm = torch.amp.autocast(device_type='cuda') if device.type != 'cpu' and args.use_autocast else contextlib.nullcontext()
-        
+
+    # Build RetNet config
     model_config = RetNetConfig(
         vocab_size=4**args.k_num+6,
         retnet_embed_dim=args.retnet_embed_dim,
@@ -339,7 +341,8 @@ if __name__ == '__main__':
         dropout=args.dropout,
         activation_dropout=args.activation_dropout
     )
-    
+
+    # Initialize SSP model
     model = rnaret_ssp_model(model_config)
     if args.ssp_model_path is not None:
         model.load_state_dict(torch.load(args.ssp_model_path,weights_only=True,map_location=device))
@@ -348,6 +351,9 @@ if __name__ == '__main__':
     post_processor = post_process()
     model = model.to(device)
     
+    # -----------------------------
+    # Prepare datasets and dataloaders
+    # -----------------------------
     if args.train_path is not None and not args.eval_only:
         datasets = []
         for data_dir in args.train_path:
@@ -377,10 +383,16 @@ if __name__ == '__main__':
         test_dataset = torch.utils.data.ConcatDataset(test_datasets)
         test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size)
     
+    # -----------------------------
+    # Optimizer and loss function
+    # -----------------------------
     optimizer = torch.optim.AdamW(params=model.parameters(), lr=args.learning_rate)
     criterion = torch.nn.BCEWithLogitsLoss(reduction='none')
     scaler = torch.amp.GradScaler(enabled=True)
     
+    # -----------------------------
+    # Training loop
+    # -----------------------------
     if not args.eval_only:
         for epoch in range(args.num_epochs):
             model.train()
@@ -402,7 +414,10 @@ if __name__ == '__main__':
                 scaler.update()
                 pbar.set_postfix(loss=loss.item())
             logger.info(f'Training Set —— Epoch: {epoch}, Loss: {sum(total_loss)/len(total_loss):.5f}')
-                    
+            
+            # -----------------------------
+            # Validation
+            # -----------------------------
             model.eval()
             with torch.no_grad():
                 total_precision = []
@@ -433,7 +448,11 @@ if __name__ == '__main__':
                 logger.info(f'Validation Set —— Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1:.4f}')
             
         torch.save(model.state_dict(), f"{args.output_path}/{args.task_name}_{args.k_num}mer.pth")
-        
+    
+    
+    # -----------------------------
+    # Test evaluation loop
+    # -----------------------------
     if args.test_path is not None:
         model.eval()
         with torch.no_grad():
